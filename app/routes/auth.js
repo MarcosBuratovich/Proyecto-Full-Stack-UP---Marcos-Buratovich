@@ -7,7 +7,8 @@ const router = express.Router();
 
 router.post('/login', AuthController.login);
 
-router.post('/register', protect, restrictTo('admin'), AuthController.register);
+// Registro público deshabilitado
+// router.post('/register', AuthController.register);
 
 router.get('/profile', protect, AuthController.getProfile);
 

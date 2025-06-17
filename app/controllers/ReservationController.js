@@ -3,16 +3,25 @@ const Product = require('../models/ProductModel');
 const SafetyEquipment = require('../models/SafetyEquipmentModel');
 
 const listAll = async (req, res) => {
-    try {
-        const reservations = await Reservation.find({})
-            .populate('products.product')
-            .populate('safetyEquipment.equipment');
-        
-        if (!reservations.length) return res.status(204).send({ message: 'No Content' });
-        return res.status(200).json({ reservations });
-    } catch (err) {
-        return res.status(500).json({ error: err.message });
+  try {
+    let reservations;
+    if (req.user.role === 'admin' || req.user.role === 'staff') {
+      // Admins y staff pueden ver todas las reservas
+      reservations = await Reservation.find({})
+        .populate('products.product')
+        .populate('safetyEquipment.equipment');
+    } else {
+      // Usuarios regulares solo pueden ver sus propias reservas
+      reservations = await Reservation.find({ 'customer.id': req.user.id })
+        .populate('products.product')
+        .populate('safetyEquipment.equipment');
     }
+
+    if (!reservations.length) return res.status(204).send({ message: 'No Content' });
+    return res.status(200).json({ reservations });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 };
 
 const show = async (req, res) => {
@@ -55,8 +64,12 @@ const getByDate = async (req, res) => {
 
 const create = async (req, res) => {
     try {
-        const { customer, products, date, slots } = req.body;
-        
+        const { customer, products, date, slots, riders, safetyEquipmentRequested } = req.body;
+
+        if (!customer || !customer.name || !customer.contact) {
+            return res.status(400).json({ message: 'Customer name and contact are required' });
+        }
+
         const reservationDate = new Date(date);
         const now = new Date();
         
@@ -87,7 +100,10 @@ const create = async (req, res) => {
         const safetyEquipment = [];
         let requiresHelmet = false;
         let requiresLifeJacket = false;
-        let numberOfRiders = 0;
+        // Max riders capacity (2 per JetSki/ATV)
+        let capacity = 0;
+        // Contador de unidades totales para aplicar descuento cuando >1
+        const totalUnits = products.reduce((sum, item) => sum + item.quantity, 0);
         
         for (const productItem of products) {
             const product = await Product.findById(productItem.product);
@@ -105,7 +121,8 @@ const create = async (req, res) => {
             
             if (product.type === 'JetSki' || product.type === 'ATV') {
                 requiresHelmet = true;
-                numberOfRiders += Math.min(productItem.quantity * 2, productItem.quantity);
+                // accumulate capacity for riders (2 per unit)
+                capacity += productItem.quantity * 2;
             }
             
             if (product.type === 'JetSki') {
@@ -113,39 +130,66 @@ const create = async (req, res) => {
             }
         }
         
+        // Validate riders if equipment needed
+        let numberOfRiders;
         if (requiresHelmet) {
-            const helmets = await SafetyEquipment.findOne({ type: 'Helmet', status: 'available' });
-            if (!helmets || helmets.quantity < numberOfRiders) {
-                return res.status(400).json({ message: 'Not enough helmets available' });
+            if (riders == null) {
+                return res.status(400).json({ message: 'Number of riders is required for JetSki/ATV' });
             }
-            safetyEquipment.push({
-                equipment: helmets._id,
-                quantity: numberOfRiders
-            });
+            if (riders < 1 || riders > capacity) {
+                return res.status(400).json({ message: `Riders must be between 1 and ${capacity}` });
+            }
+            numberOfRiders = riders;
         }
         
-        if (requiresLifeJacket) {
-            const lifeJackets = await SafetyEquipment.findOne({ type: 'LifeJacket', status: 'available' });
-            if (!lifeJackets || lifeJackets.quantity < numberOfRiders) {
-                return res.status(400).json({ message: 'Not enough life jackets available' });
+        // Procesar equipo de seguridad por talla
+        if (requiresHelmet || requiresLifeJacket) {
+            if (!Array.isArray(safetyEquipmentRequested) || safetyEquipmentRequested.length === 0) {
+                return res.status(400).json({ message: 'Safety equipment selection (type, size, quantity) is required.' });
             }
-            safetyEquipment.push({
-                equipment: lifeJackets._id,
-                quantity: numberOfRiders
-            });
+
+            let requestedHelmets = 0;
+            let requestedJackets = 0;
+
+            for (const item of safetyEquipmentRequested) {
+                if (!item.type || !item.size || !item.quantity) {
+                    return res.status(400).json({ message: 'Each safety equipment entry must include type, size and quantity.' });
+                }
+                if (item.quantity < 1) {
+                    return res.status(400).json({ message: 'Safety equipment quantity must be at least 1.' });
+                }
+
+                if (item.type === 'Helmet') requestedHelmets += item.quantity;
+                if (item.type === 'LifeJacket') requestedJackets += item.quantity;
+
+                const equipmentDoc = await SafetyEquipment.findOne({ type: item.type, size: item.size, status: 'available' });
+                if (!equipmentDoc || equipmentDoc.quantity < item.quantity) {
+                    return res.status(400).json({ message: `Not enough ${item.type} size ${item.size} available` });
+                }
+
+                safetyEquipment.push({
+                    equipment: equipmentDoc._id,
+                    quantity: item.quantity
+                });
+            }
+
+            if (requiresHelmet && requestedHelmets !== numberOfRiders) {
+                return res.status(400).json({ message: `Helmets selected (${requestedHelmets}) must equal riders (${numberOfRiders})` });
+            }
+            if (requiresLifeJacket && requestedJackets !== numberOfRiders) {
+                return res.status(400).json({ message: `Life jackets selected (${requestedJackets}) must equal riders (${numberOfRiders})` });
+            }
         }
         
         let totalPrice = 0;
-        const productTypes = new Set();
         
         for (const productItem of products) {
             const product = await Product.findById(productItem.product);
-            productTypes.add(product.type);
             totalPrice += product.price * productItem.quantity * slots.length;
         }
         
         let discount = 0;
-        if (productTypes.size > 1) {
+        if (totalUnits > 1) {
             discount = totalPrice * 0.1;
             totalPrice -= discount;
         }
@@ -153,12 +197,24 @@ const create = async (req, res) => {
         const slotTime = Math.floor(slots[0] / 2); // Convert slot to hour
         const slotMinute = (slots[0] % 2) * 30;   // Get minute (0 or 30)
         
-        const paymentDeadline = new Date(date);
-        paymentDeadline.setHours(slotTime, slotMinute, 0, 0);
+        // Construir fecha local utilizando componentes para evitar problemas de zona horaria
+        let paymentDeadline;
+        if (typeof date === 'string') {
+            const [y, m, d] = date.split('-').map(Number);
+            paymentDeadline = new Date(y, m - 1, d, slotTime, slotMinute, 0, 0);
+        } else {
+            // date ya es Date
+            paymentDeadline = new Date(date);
+            paymentDeadline.setHours(slotTime, slotMinute, 0, 0);
+        }
+        // Restar 2 horas para el límite de pago
         paymentDeadline.setHours(paymentDeadline.getHours() - 2);
         
         const reservation = new Reservation({
-            customer,
+            customer: {
+                name: customer.name,
+                contact: customer.contact
+            },
             products,
             safetyEquipment,
             date: reservationDate,
@@ -166,7 +222,8 @@ const create = async (req, res) => {
             totalPrice,
             discount,
             paymentDeadline,
-            paymentStatus: 'pending'
+            paymentStatus: 'pending',
+            createdBy: req.user.id
         });
         
         await reservation.save();
@@ -215,11 +272,20 @@ const update = async (req, res) => {
 const cancelReservation = async (req, res) => {
     try {
         const reservation = await Reservation.findById(req.params.id);
-        if (!reservation) return res.status(404).json({ message: 'Reservation not found' });
-        
+        if (!reservation) {
+            return res.status(404).json({ message: 'Reservation not found' });
+        }
+
+        const isOwner = reservation.customer && reservation.customer.id && reservation.customer.id.toString() === req.user.id;
+        const isAdminOrStaff = req.user.role === 'admin' || req.user.role === 'staff';
+
+        if (!isOwner && !isAdminOrStaff) {
+            return res.status(403).json({ message: 'Forbidden: You are not authorized to cancel this reservation' });
+        }
+
         const now = new Date();
-        const reservationSlotTime = Math.floor(reservation.slots[0] / 2); // Convert slot to hour
-        const reservationSlotMinute = (reservation.slots[0] % 2) * 30;    // Get minute (0 or 30)
+        const reservationSlotTime = Math.floor(reservation.slots[0] / 2);
+        const reservationSlotMinute = (reservation.slots[0] % 2) * 30;
         
         const slotTime = new Date(reservation.date);
         slotTime.setHours(reservationSlotTime, reservationSlotMinute, 0, 0);
@@ -227,10 +293,24 @@ const cancelReservation = async (req, res) => {
         const cancellationDeadline = new Date(slotTime);
         cancellationDeadline.setHours(cancellationDeadline.getHours() - 2);
         
+        if (now > cancellationDeadline && !isAdminOrStaff) {
+            return res.status(403).json({ message: 'Cancellation window has passed. Only admins can cancel now.' });
+        }
+        
+        // Marcar como cancelada
         reservation.cancellationStatus = 'canceled';
         
-        if (reservation.paymentStatus === 'paid' && now < cancellationDeadline) {
-            reservation.paymentStatus = 'refunded';
+        let message = 'Reservation canceled successfully.';
+        if (reservation.paymentStatus === 'paid') {
+            if (now < cancellationDeadline) {
+                reservation.paymentStatus = 'refunded';
+                message = 'Reservation canceled. A full refund will be processed.';
+            } else {
+                message = 'Reservation canceled without refund as the cancellation window has passed.';
+            }
+        } else {
+            // Si estaba pendiente, simplemente marcar el pago como cancelado
+            reservation.paymentStatus = 'canceled';
         }
         
         await reservation.save();
@@ -244,9 +324,7 @@ const cancelReservation = async (req, res) => {
         }
         
         return res.status(200).json({ 
-            message: now < cancellationDeadline 
-                ? 'Reservation canceled with full refund' 
-                : 'Reservation canceled without refund',
+            message,
             reservation 
         });
     } catch (err) {
@@ -287,17 +365,15 @@ const processStormRefund = async (req, res) => {
             return res.status(400).json({ message: 'Cannot process refund for unpaid reservation' });
         }
         
-        reservation.cancellationStatus = 'storm-refund';
-        reservation.paymentStatus = 'partial-refund';
+        reservation.cancellationStatus = 'storm refund';
+        reservation.paymentStatus = 'partial refund';
         reservation.weatherCondition = 'storm';
         
         const refundAmount = reservation.totalPrice * 0.5;
+        reservation.refundAmount = refundAmount;
         
         await reservation.save();
         
-        for (const productItem of reservation.products) {
-            await releaseProductBookings(productItem.product, reservation.date, reservation.slots, productItem.quantity);
-        }
         for (const productItem of reservation.products) {
             await releaseProductBookings(productItem.product, reservation.date, reservation.slots, productItem.quantity);
         }
@@ -430,5 +506,7 @@ module.exports = {
     update,
     cancelReservation,
     processPayment,
-    processStormRefund
+    processStormRefund,
+    releaseProductBookings,
+    releaseEquipmentBookings
 };

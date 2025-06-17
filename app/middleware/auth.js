@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const CONFIG = require('../config/config');
 const User = require('../models/UserModel');
+const jsonwebtoken = require('jsonwebtoken');
 
 const protect = async (req, res, next) => {
     try {
@@ -16,7 +17,7 @@ const protect = async (req, res, next) => {
             });
         }
 
-        const decoded = jwt.verify(token, CONFIG.JWT_SECRET);
+        const decoded = jsonwebtoken.verify(token, CONFIG.JWT_SECRET);
 
         const currentUser = await User.findById(decoded.id);
         if (!currentUser) {
@@ -60,20 +61,7 @@ const restrictTo = (...roles) => {
     };
 };
 
-const hasPermission = (permission) => {
-    return (req, res, next) => {
-        if (!req.user.hasPermission(permission)) {
-            return res.status(403).json({
-                status: 'error',
-                message: 'You do not have permission to perform this action'
-            });
-        }
-        next();
-    };
-};
-
 module.exports = {
     protect,
-    restrictTo,
-    hasPermission
+    restrictTo
 };

@@ -9,7 +9,17 @@ const ReservationSchema = new mongoose.Schema({
         contact: {
             type: String,
             required: true
+        },
+        id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: false
         }
+    },
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
     },
     products: [{
         product: {
@@ -50,24 +60,24 @@ const ReservationSchema = new mongoose.Schema({
     paymentStatus: {
         type: String,
         required: true,
-        enum: ['pending', 'paid', 'refunded', 'partial-refund'],
+        enum: ['pending', 'paid', 'refunded', 'partial refund', 'canceled'],
         default: 'pending'
     },
     paymentMethod: {
         type: {
             type: String,
             enum: ['cash', 'card'],
-            required: function() { return this.paymentStatus !== 'pending'; }
+            required: function() { return this.paymentStatus === 'paid'; }
         },
         currency: {
             type: String,
             enum: ['local', 'foreign'],
-            required: function() { return this.paymentStatus !== 'pending'; }
+            required: function() { return this.paymentStatus === 'paid'; }
         }
     },
     cancellationStatus: {
         type: String,
-        enum: ['none', 'canceled', 'storm-refund'],
+        enum: ['none', 'canceled', 'storm refund'],
         default: 'none'
     },
     weatherCondition: {
@@ -76,6 +86,10 @@ const ReservationSchema = new mongoose.Schema({
         default: 'sunny'
     },
     discount: {
+        type: Number,
+        default: 0
+    },
+    refundAmount: {
         type: Number,
         default: 0
     },
@@ -92,6 +106,7 @@ ReservationSchema.index({ date: 1 });
 ReservationSchema.index({ 'customer.name': 1 });
 ReservationSchema.index({ paymentStatus: 1 });
 ReservationSchema.index({ cancellationStatus: 1 });
+ReservationSchema.index({ createdBy: 1 });
 
 const Reservation = mongoose.model('Reservation', ReservationSchema);
 

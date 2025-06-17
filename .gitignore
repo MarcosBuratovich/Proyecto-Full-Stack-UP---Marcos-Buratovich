@@ -52,3 +52,4 @@ db/
 *.pid
 *.seed
 *.pid.lock
+FRONTEND_GUIDELINES.md

@@ -9,7 +9,7 @@ const SafetyEquipmentSchema = new mongoose.Schema({
     size: {
         type: String,
         required: true,
-        enum: ['S', 'M', 'L', 'XL']
+        enum: ['XS', 'S', 'M', 'L', 'XL']
     },
     quantity: {
         type: Number,

@@ -1,8 +1,12 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
+const cors = require('cors');
 
 const app = express();
+
+// Iniciar cron job para cancelar reservas no pagadas
+require('./jobs/reservationCleanup');
 
 const productRoutes = require('./routes/product');
 const safetyEquipmentRoutes = require('./routes/safetyEquipment');
@@ -11,6 +15,7 @@ const authRoutes = require('./routes/auth');
 const availabilityRoutes = require('./routes/availability');
 
 // Middleware
+app.use(cors()); // Habilita CORS para todas las rutas
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({extended: false}));
 

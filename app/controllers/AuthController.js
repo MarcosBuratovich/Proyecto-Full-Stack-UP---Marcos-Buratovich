@@ -2,8 +2,8 @@ const User = require('../models/UserModel');
 const jwt = require('jsonwebtoken');
 const CONFIG = require('../config/config');
 
-const signToken = (id) => {
-    return jwt.sign({ id }, CONFIG.JWT_SECRET, {
+const signToken = (user) => {
+    return jwt.sign({ id: user._id, name: user.name, username: user.username, role: user.role }, CONFIG.JWT_SECRET, {
         expiresIn: CONFIG.JWT_EXPIRES_IN
     });
 };
@@ -50,7 +50,12 @@ const login = async (req, res) => {
             });
         }
 
-        const token = signToken(user._id);
+        // Only staff and admin can log in
+        if (user.role !== 'staff' && user.role !== 'admin') {
+            return res.status(403).json({ status: 'error', message: 'Access denied: only staff or admin can log in.' });
+        }
+
+        const token = signToken(user);
         
         user.password = undefined;
 
@@ -91,7 +96,7 @@ const getProfile = async (req, res) => {
 };
 
 module.exports = {
-    register,
     login,
+    register,
     getProfile
 };
